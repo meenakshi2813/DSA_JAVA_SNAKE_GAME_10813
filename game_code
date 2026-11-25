@@ -1,0 +1,330 @@
+import java.io.*;
+import java.util.*;
+
+/**
+ * Console-based Snake Game (10x10 grid)
+ * PS No. 76 - Concepts: ArrayDeque, 2D Array, HashSet (hashing), custom Sorting
+ *
+ * Grid cells are (row, column) starting from (0,0).
+ * Snake starts at (5,5), length 1, moving right. First food is at (5,7).
+ * Each food gives 10 points. Scores are saved in scores.txt.
+ *
+ * Optimisations:
+ *  - A cell is stored as one int key (row*10 + col), so no int[] objects are created per move.
+ *  - Every move is O(1): add head, remove tail, HashSet check, and the grid is updated
+ *    only at the 2-3 cells that changed instead of being redrawn.
+ *  - Direction uses lookup arrays (no switch), food placement never loops randomly.
+ *  - The board is printed with a single StringBuilder.
+ *  - Top 5 is found while reading scores.txt line by line (O(K), memory O(1)).
+ */
+public class SnakeGame {
+
+    static final int N = 10;                          // grid size
+    static final int TOP = 5;                         // leaderboard size
+    static final String FILE_NAME = "scores.txt";
+    static final Scanner sc = new Scanner(System.in);
+
+    // Direction index: 0 = W (up), 1 = A (left), 2 = S (down), 3 = D (right)
+    static final String KEYS = "WASD";
+    static final int[] DR = {-1, 0, 1, 0};
+    static final int[] DC = {0, -1, 0, 1};
+
+    // Snake body as cell keys: head at the FIRST position, tail at the LAST position
+    private final ArrayDeque<Integer> snake = new ArrayDeque<>();
+    // Same keys in a HashSet for O(1) self-collision check
+    private final HashSet<Integer> body = new HashSet<>();
+    // Board drawn on a 10x10 two-dimensional array
+    private final char[][] grid = new char[N][N];
+    private final Random rnd = new Random();
+
+    private int foodKey = -1, score, dir;
+    private boolean over;
+    private String overReason = "";
+    private boolean verbose;                          // print head moves (used by test cases)
+
+    // ---------------------------------------------------------------- helpers
+
+    private static int key(int r, int c) {
+        return r * N + c;
+    }
+
+    private void addHead(int r, int c) {
+        int k = key(r, c);
+        snake.addFirst(k);                            // add the new head
+        body.add(k);
+    }
+
+    // Build the 2D board once from the current state
+    private void rebuildGrid() {
+        for (char[] row : grid) Arrays.fill(row, '.');
+        for (int k : snake) grid[k / N][k % N] = 'o';
+        int h = snake.peekFirst();
+        grid[h / N][h % N] = 'O';
+        if (foodKey >= 0) grid[foodKey / N][foodKey % N] = '*';
+    }
+
+    // Default start: snake at (5,5), length 1, moving right, food at (5,7)
+    void init() {
+        setup(new int[][]{{5, 5}}, 'D', 5, 7);
+    }
+
+    // Start from a custom state (used by test cases). Cells are given from tail to head.
+    void setup(int[][] tailToHead, char d, int fr, int fc) {
+        snake.clear();
+        body.clear();
+        over = false;
+        overReason = "";
+        for (int[] c : tailToHead) addHead(c[0], c[1]);
+        dir = KEYS.indexOf(d);
+        foodKey = key(fr, fc);
+        score = (snake.size() - 1) * 10;
+        rebuildGrid();
+    }
+
+    // Pick the r-th free cell directly: no random retry loop, always O(N*N) at worst
+    private void placeFood() {
+        int free = N * N - snake.size();
+        if (free == 0) {                              // board completely full
+            foodKey = -1;
+            over = true;
+            overReason = "You filled the whole board. You win!";
+            return;
+        }
+        int pick = rnd.nextInt(free);
+        for (int k = 0; k < N * N; k++) {
+            if (body.contains(k)) continue;
+            if (pick-- == 0) {
+                foodKey = k;
+                grid[k / N][k % N] = '*';
+                return;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------- game logic
+
+    void processKey(char k) {
+        int d = KEYS.indexOf(Character.toUpperCase(k));
+        if (d < 0) {
+            System.out.println("Invalid key. Use W/A/S/D. Snake continues in current direction.");
+        } else if (d == (dir + 2) % 4) {              // exact opposite direction
+            System.out.println("Cannot reverse direction. Snake continues in current direction.");
+        } else {
+            dir = d;
+        }
+        step();
+    }
+
+    private void step() {
+        int head = snake.peekFirst();
+        int nr = head / N + DR[dir];
+        int nc = head % N + DC[dir];
+
+        // 1. Wall collision
+        if (nr < 0 || nr >= N || nc < 0 || nc >= N) {
+            over = true;
+            overReason = "Wall collision.";
+            return;
+        }
+
+        int nk = key(nr, nc);
+        boolean eat = (nk == foodKey);
+
+        // 2. Self collision in O(1). The tail cell is free to enter when the snake
+        //    is not growing, because the tail moves away in the same step.
+        if (body.contains(nk) && (eat || nk != snake.peekLast())) {
+            if (verbose) System.out.println("Head moves to (" + nr + "," + nc + ")");
+            over = true;
+            overReason = "Self collision at (" + nr + "," + nc + ").";
+            return;
+        }
+
+        // 3. Move: update only the cells that change
+        grid[head / N][head % N] = 'o';               // old head becomes body
+        if (!eat) {
+            int t = snake.removeLast();               // remove the tail
+            body.remove(t);
+            grid[t / N][t % N] = '.';
+        }
+        snake.addFirst(nk);                           // add the new head
+        body.add(nk);
+        grid[nr][nc] = 'O';
+        if (verbose) System.out.println("Head moves to (" + nr + "," + nc + ")");
+
+        if (eat) {
+            score += 10;
+            System.out.println("Food eaten.");
+            placeFood();
+        }
+    }
+
+    // ---------------------------------------------------------------- display
+
+    void draw() {
+        String border = "+" + "-".repeat(N) + "+\n";
+        StringBuilder sb = new StringBuilder(160).append(border);
+        for (char[] row : grid) sb.append('|').append(row).append("|\n");
+        sb.append(border).append("Score: ").append(score)
+          .append(" | Length: ").append(snake.size());
+        System.out.println(sb);
+    }
+
+    void printResult() {
+        if (over) {
+            System.out.println(overReason);
+            System.out.println("Game Over. Score: " + score + " | Final length: " + snake.size());
+        } else {
+            System.out.println("Score: " + score + " | Length: " + snake.size());
+        }
+    }
+
+    // ------------------------------------------------------ scores and sorting
+
+    static void saveScore(int s) {
+        try (BufferedWriter bw = new BufferedWriter(new FileWriter(FILE_NAME, true))) {
+            bw.write(String.valueOf(s));
+            bw.newLine();
+        } catch (IOException e) {
+            System.out.println("Could not save score: " + e.getMessage());
+        }
+    }
+
+    // Own sorting method: insertion into a descending array that keeps only TOP scores.
+    // Returns the new number of stored scores.
+    static int insertTop(int[] top, int count, int v) {
+        if (count == TOP && v <= top[TOP - 1]) return count;   // too small, ignore
+        int i = (count < TOP) ? count : TOP - 1;
+        while (i > 0 && top[i - 1] < v) {                      // shift smaller scores down
+            top[i] = top[i - 1];
+            i--;
+        }
+        top[i] = v;
+        return (count < TOP) ? count + 1 : TOP;
+    }
+
+    static int[] topFive(int[] scores) {
+        int[] top = new int[TOP];
+        int cnt = 0;
+        for (int v : scores) cnt = insertTop(top, cnt, v);
+        return Arrays.copyOf(top, cnt);
+    }
+
+    // Read scores.txt line by line and keep only the top 5 (O(K) time, O(1) memory)
+    static int[] loadTopFive() {
+        int[] top = new int[TOP];
+        int cnt = 0;
+        File f = new File(FILE_NAME);
+        if (f.exists()) {
+            try (BufferedReader br = new BufferedReader(new FileReader(f))) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    line = line.trim();
+                    if (line.isEmpty()) continue;
+                    try {
+                        cnt = insertTop(top, cnt, Integer.parseInt(line));
+                    } catch (NumberFormatException ignored) {
+                        // skip invalid lines
+                    }
+                }
+            } catch (IOException e) {
+                System.out.println("Could not read scores: " + e.getMessage());
+            }
+        }
+        return Arrays.copyOf(top, cnt);
+    }
+
+    static void showTopFive(int[] top) {
+        if (top.length == 0) {
+            System.out.println("Leaderboard (Top 5): no scores yet.");
+            return;
+        }
+        StringJoiner sj = new StringJoiner(", ");
+        for (int v : top) sj.add(String.valueOf(v));
+        System.out.println("Leaderboard (Top 5): " + sj);
+    }
+
+    // ------------------------------------------------------------- play mode
+
+    void play() {
+        init();
+        verbose = false;
+        System.out.println("Use W/A/S/D (up/left/down/right) and press Enter.");
+        System.out.println("You can type several keys at once, e.g. DDS.");
+        while (!over) {
+            draw();
+            System.out.print("Move: ");
+            if (!sc.hasNextLine()) break;
+            for (char ch : sc.nextLine().toCharArray()) {
+                if (Character.isWhitespace(ch)) continue;
+                if (over) break;
+                processKey(ch);
+            }
+        }
+        if (!over) System.out.println();
+        draw();
+        printResult();
+        saveScore(score);
+        showTopFive(loadTopFive());
+    }
+
+    // ------------------------------------------------------------ test cases
+
+    private void playMoves(String moves) {
+        for (char ch : moves.toCharArray()) {
+            if (Character.isWhitespace(ch) || ch == ',') continue;
+            if (over) break;
+            processKey(ch);
+        }
+    }
+
+    static void runTests() {
+        SnakeGame g = new SnakeGame();
+        g.verbose = true;
+
+        System.out.println("\nTest Case 1: Normal Input");
+        System.out.println("Start game. Moves: D, D");
+        g.init();
+        g.playMoves("DD");
+        g.printResult();
+
+        System.out.println("\nTest Case 2: Boundary / Minimum Input");
+        System.out.println("Snake head at (0,0). Move: W");
+        g.setup(new int[][]{{0, 0}}, 'D', 5, 7);
+        g.playMoves("W");
+        g.printResult();
+
+        System.out.println("\nTest Case 3: Invalid Input");
+        System.out.println("Key pressed: X");
+        g.init();
+        g.playMoves("X");
+        g.printResult();
+
+        System.out.println("\nTest Case 4: Different Valid Scenario");
+        System.out.println("Snake length 5, body (5,3) to (5,7), head (5,7). Saved scores: 30, 10. Moves: S, A, W");
+        g.setup(new int[][]{{5, 3}, {5, 4}, {5, 5}, {5, 6}, {5, 7}}, 'D', 9, 9);
+        g.playMoves("SAW");
+        g.printResult();
+        showTopFive(topFive(new int[]{30, 10, g.score}));   // saved scores + this game's score
+    }
+
+    // ------------------------------------------------------------------ main
+
+    public static void main(String[] args) {
+        while (true) {
+            System.out.println("\n====== SNAKE GAME ======");
+            System.out.println("1. Play Game");
+            System.out.println("2. Run Test Cases");
+            System.out.println("3. Show Top 5 Scores");
+            System.out.println("4. Exit");
+            System.out.print("Enter your choice: ");
+            if (!sc.hasNextLine()) break;
+            switch (sc.nextLine().trim()) {
+                case "1": new SnakeGame().play(); break;
+                case "2": runTests(); break;
+                case "3": showTopFive(loadTopFive()); break;
+                case "4": System.out.println("Goodbye!"); return;
+                default:  System.out.println("Invalid choice. Enter 1-4.");
+            }
+        }
+    }
+}
